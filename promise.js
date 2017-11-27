@@ -1,4 +1,7 @@
 /*
+* 实现Promise是根据Promise规范来的：https://promisesaplus.com/
+* 规范很短，所以每句都可能很重要
+
 * Promise特点
 * 1. 状态改变后不可再改变(状态凝固)
 *     pending,fullfilled,rejected
@@ -14,19 +17,14 @@
 * 3. promise创建时传入的函数会立即执行  
 */
 
-
 /*
-* Promise原理
-* 1. 
-*
-*
-*
-*
-*
-*
-*
+* 考虑四中情况，分别会有什么问题
+* 假设new一个Promise时传入的函数为funA, then中的函数为funCD
+*  1 funA是同步，funCD为同步
+*  2 funA是同步，funCD为异步
+*  3 funA是异步，funCD为同步
+*  4 funA是异步，funCD为异步
 */
-
 
 /*
 * 状态确定后挨个调用数组中的方法
@@ -44,29 +42,40 @@ function Promise(executor) {
   * 即调用时函数体内的this应该是undefined/window
   */ 
   function resolve(value) {
-    if (self.status === 'pending') {      // 这里是为了确保状态不可改变
-      self.status = 'resolved'
-      // 保存传入的参数，promise成功时的值
-      self.data = value
-      var f
-      for (var i = 0; i < self.resolvedCallbacks.length; i++) {
-        // 为什么分开写？
-        // 确保是函数的调用，即被调用时函数体内的this为undefined/window
-        f = self.resolvedCallbacks[i]
-        f(value)
-      }
+    // 测试用例给我们传了一个我自己定义的Promise实例时
+    if (value instanceof Promise) {
+      value.then(resolve, reject)
+      return
     }
+    // 这里为什么也要异步
+    setTimeout(function() {
+      if (self.status === 'pending') {      // 这里是为了确保状态不可改变
+        self.status = 'resolved'
+        // 保存传入的参数，promise成功时的值
+        self.data = value
+        var f
+        for (var i = 0; i < self.resolvedCallbacks.length; i++) {
+          // 为什么分开写？
+          // 确保是函数的调用，即被调用时函数体内的this为undefined/window
+          f = self.resolvedCallbacks[i]
+          f(value)
+        }
+      }
+    })
   }
   function reject(reason) {
-    if (self.status === 'pending') {
-      self.status = 'rejected'
-      self.data = reason
-      var f
-      for (var i = 0; i < self.rejectedCallbacks.length; i++) {
-        f = self.rejectedCallbacks[i]
-        f(reason)
+    // 为什么是异步
+    setTimeout(function() {
+      if (self.status === 'pending') {
+        self.status = 'rejected'
+        self.data = reason
+        var f
+        for (var i = 0; i < self.rejectedCallbacks.length; i++) {
+          f = self.rejectedCallbacks[i]
+          f(reason)
+        }
       }
-    }
+    })
   }
 
   try {
@@ -88,11 +97,12 @@ function Promise(executor) {
 Promise.prototype.then = function(onResolved, onRejected) {
   var self = this
   if (typeof onResolved !== 'function') {
-    // 一般人想法是将onRejected/onResolved变为函数.为了方便后面使用
-    onResolved = function() {}
+    // 为什么要这样
+    onResolved = function(value) { return value }
   }
   if (typeof onRejected !== 'function') {
-    onRejected = function() {}
+    // 为什么要这样，这里throw,后面的try可以catch到。catch到就会reject(e)
+    onRejected = function(reason) { throw reason}
   }
 
   /*
@@ -110,43 +120,57 @@ Promise.prototype.then = function(onResolved, onRejected) {
     * 
     */
     promise2 = new Promise(function(resolve, reject) {
-      try {
-        // 这个data是第一个promise中传入的函数中的resolve携带的参数！！！！！！！！！！！！
-        // onResolved是在then里的，
-        // 如果onResolved返回的又是Promise实例x呢，直接resolve是不行的，需要在返回的实例x中的then里resolve值
-        var x = onResolved(self.data)
-        if (x instanceof Promise) {
-          // 非简化。可以想想了，tmd又是递归？
-          // x.then(function(value) {
-          //   resolve(value)
-          // }, function(reason) {
-          //   reject(reason)
-          // })
+      // 为什么这里要异步？
+      setTimeout(function() {
+        try {
+          // 这个data是第一个promise中传入的函数中的resolve携带的参数！！！！！！！！！！！！
+          // onResolved是在then里的，
+          // 如果onResolved返回的又是Promise实例x呢，直接resolve是不行的，需要在返回的实例x中的then里resolve值
+          var x = onResolved(self.data)
+          // 非兼容
+          // if (x instanceof Promise) {
+          //   // 非简化。可以想想了，tmd又是递归？
+          //   // x.then(function(value) {
+          //   //   resolve(value)
+          //   // }, function(reason) {
+          //   //   reject(reason)
+          //   // })
 
-          // 简化
-          x.then(resolve, reject)
-        } else {
-          resolve(x)
+          //   // 简化
+          //   x.then(resolve, reject)
+          // } else {
+          //   resolve(x)
+          // }
+
+          // 兼容下
+          RESOLVE_PROMISE(promise2, x, resolve, reject)
+        } catch(e) {
+          reject(e)
         }
-      } catch(e) {
-        reject(e)
-      }
+      })
     })
   }
 
   if (self.status === 'rejected') {
     promise2 = new Promise(function(resolve, reject) {
-      try {
-        var x = onRejected(self.data)
-        if (x instanceof Promise) {
-          x.then(resolve, reject)
-        } else {
-          // 为什么是resolve
-          resolve(x)
+      // 为什么要异步
+      setTimeout(function() {
+        try {
+          var x = onRejected(self.data)
+          // 非兼容
+          // if (x instanceof Promise) {
+          //   x.then(resolve, reject)
+          // } else {
+          //   // 为什么是resolve
+          //   resolve(x)
+          // }
+
+          // 兼容
+          RESOLVE_PROMISE(promise2, x, resolve, reject)
+        } catch(e) {
+          reject(e)
         }
-      } catch(e) {
-        reject(e)
-      }
+      })
     })
   }
 
@@ -157,11 +181,15 @@ Promise.prototype.then = function(onResolved, onRejected) {
       self.resolvedCallbacks.push(function(value) {
         try {
           var x = onResolved(self.data)
-          if (x instanceof Promise) {
-            x.then(resolve, reject)
-          } else {
-            resolve(x)
-          }
+          // 非兼容
+          // if (x instanceof Promise) {
+          //   x.then(resolve, reject)
+          // } else {
+          //   resolve(x)
+          // }
+
+          // 兼容
+          RESOLVE_PROMISE(promise2, x, resolve, reject)
         } catch(e) {
           reject(e)
         }
@@ -169,11 +197,15 @@ Promise.prototype.then = function(onResolved, onRejected) {
       self.rejectedCallbacks.push(function(reason) {
         try {
           var x = onRejected(self.data)
-          if (x instanceof Promise) {
-            x.then(resolve, reject)
-          } else {
-            resolve(x)
-          }
+          // 非兼容
+          // if (x instanceof Promise) {
+          //   x.then(resolve, reject)
+          // } else {
+          //   resolve(x)
+          // }
+
+          // 兼容
+          RESOLVE_PROMISE(promise2, x, resolve, reject)
         } catch(e) {
           reject(e)
         }
@@ -184,17 +216,39 @@ Promise.prototype.then = function(onResolved, onRejected) {
   return promise2
 }
 
+/*
+* 上面就基本已经实现了Promise,但是没有达到 https://promisesaplus.com/ 规范的要求
+* 这个函数的作用是使其他的Promise可以互相兼容------兼容
+*/
 function RESOLVE_PROMISE(promise, x, resolve, reject) {
   if (promise === x) {
     reject(new TypeError('Chaining cycle is deteced for promise'))
     return
   }
+
   if (x instanceof Promise) {
-    x.then(resolve, reject)
+    if (x.status === 'pending') {
+      x.then(function(v) {
+        RESOLVE_PROMISE(promise, v, resolve, reject)
+      }, reject)
+    } else {
+      x.then(resolve, reject)
+    }
     return
   }
+  
+  // 只有这两种数据类型可以保存属性
   if (x !== null && (typeof x === 'object' || typeof x === 'function')) {
     try {
+      /*
+      * 为什么要把then单独拿出来？
+      *   因为我们是在读别人给的属性，但是我们不知道该属性具体为什么。也可能报错
+      *   如果该属性是getter,则每次调用就会返回不同的值。
+      * 所以只调用一次
+      * 
+      * a,b,c三者只能调用一个,为什么？
+      * 
+      */
       var then = x.then
       var called = false
       if (typeof then === 'function') {
@@ -203,13 +257,14 @@ function RESOLVE_PROMISE(promise, x, resolve, reject) {
             return
           }
           called = true
-          RESOLVE_PROMISE(promise, y, resolve, reject)
+          // 产生了递归
+          RESOLVE_PROMISE(promise, y, resolve, reject)//--- a
         }, function rejectPromise(r) {
           if (called) {
             return
           }
           called = true
-          reject(r)
+          reject(r) //------------------------------------- b
         })
       } else {
         resolve(x)
@@ -219,7 +274,7 @@ function RESOLVE_PROMISE(promise, x, resolve, reject) {
         return
       }
       called =true
-      reject(e)
+      reject(e) //----------------------------------------- c
     }
   } else {
     resolve(x)
@@ -237,4 +292,6 @@ Promise.deferred = function() {
 
   return dfd
 }
-module.exports = Promise
+try {
+  module.exports = Promise
+} catch(e) {}
