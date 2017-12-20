@@ -1,6 +1,6 @@
 /*
 * 实现Promise是根据Promise规范来的：https://promisesaplus.com/
-* 规范很短，所以每句都可能很重要
+* 规范很短，所以每句都很重要
 
 * Promise特点
 * 1. 状态改变后不可再改变(状态凝固)
@@ -18,7 +18,7 @@
 */
 
 /*
-* 考虑四中情况，分别会有什么问题
+* 在考虑某些函数执行时同步还是异步，考虑四种情况，分别会有什么问题
 * 假设new一个Promise时传入的函数为funA, then中的函数为funCD
 *  1 funA是同步，funCD为同步
 *  2 funA是同步，funCD为异步 // 为什么最后只能用这种方式
@@ -27,7 +27,16 @@
 */
 
 /*
+* 问题： 1，状态是怎么改变的(这是个好问题，是面试官提的。当时我真的没答出来)
+*           在执行resolve,reject函数时会改变状态。看resolve,reject的函数声明
+*       2，new Promise时传入的函数为什么要立即执行，then里传的两个函数为什么要异步执行？
+*           resolve，reject函数是用户决定什么时候执行的，同步、异步执行都是用户的行为
+*           这里可以好好分析下，信息量很大
+*/
+
+/*
 * 状态确定后挨个调用数组中的方法
+* 状态是在resolve,reject函数执行时改变的
 */
 function Promise(executor) {
   var self = this
@@ -50,6 +59,9 @@ function Promise(executor) {
   * --------------------------------------------------
   * 成功传值，失败传原因
   * --------------------------------------------------
+  * resolve和reject是什么时候被执行的呢？
+  * 这两个函数是在executor体内被执行的
+  * --------------------------------------------------
   * 对于在resolve,reject两个函数中
   * 异步执行resolvedCallbacks，rejectedCallbacks中函数问题
   * 
@@ -61,6 +73,7 @@ function Promise(executor) {
       return
     }
     // 这里为什么也要异步
+    // 因为数组resolvedCallbacks，rejectedCallbacks不能跟resolve同步执行。为什么？
     setTimeout(function() {
       /*
       * 这里是为了确保状态不可改变,即resolve/reject只执行一次
@@ -158,7 +171,8 @@ Promise.prototype.then = function(onResolved, onRejected) {
   if (self.status === 'resolved') {
     /*
     * 返回一个新的promise2，在promise2中调用onResolved且传入promise成功时传入的值
-    * 而promise成功时传入的值到底是什么，我们是不知道的。这是promise中最复杂的！！！
+    * 而promise成功时传入的值到底是什么，我们是不知道的。
+    * 这是promise中最复杂的！！！
     * ----------------------------------------------------------------------
     * onResolved返回值x决定了promise2的状态
     * 
@@ -181,7 +195,7 @@ Promise.prototype.then = function(onResolved, onRejected) {
           var x = onResolved(self.data)
           // 非兼容
           // if (x instanceof Promise) {
-          //   // 非简化。可以想想了，tmd又是递归？
+          //   // 非简化。可以想想了，又是递归？
           //   // x.then(function(value) {
           //   //   resolve(value)
           //   // }, function(reason) {
@@ -189,6 +203,10 @@ Promise.prototype.then = function(onResolved, onRejected) {
           //   // })
 
           //   // 简化
+               /*
+               * 这种简化让人头疼，resolve，reject是需要传参的。问题来了，两个函数的参数是怎么传进去的
+               * 这里的resolve,reject其实就是onResolved和onRejected。这种情况又是递归了
+               */
           //   x.then(resolve, reject)
           // } else {
           //   resolve(x)
@@ -209,7 +227,7 @@ Promise.prototype.then = function(onResolved, onRejected) {
       setTimeout(function() {
         try {
           var x = onRejected(self.data)
-          // 非兼容
+          // 非兼容，如果x是Bluebird，Q里的promise呢？if就不会执行了
           // if (x instanceof Promise) {
           //   x.then(resolve, reject)
           // } else {
@@ -230,6 +248,9 @@ Promise.prototype.then = function(onResolved, onRejected) {
     /*
     * promise1还是不确定状态，需要等到promise1确地了状态才能确定promise2应该怎么走
     * 查看构造函数里resolve函数的注释，找找灵感。
+    * -------------------------------------------------------
+    * 为什么在这就不需要像上面的‘resolved’，‘rejected’里异步呢？
+    *     因为这里肯定是在将来才执行的
     */
     promise2 = new Promise(function(resolve, reject) {
       self.resolvedCallbacks.push(function(value) {
@@ -274,6 +295,12 @@ Promise.prototype.then = function(onResolved, onRejected) {
 * 上面就基本已经实现了Promise,但是没有达到 https://promisesaplus.com/ 规范的要求。
 * 这个函数是多种实现中的一种
 * 这个函数的作用是使其他的Promise可以互相兼容------兼容
+* ------------------------------------------------------------------------
+* 各参数说明
+*     promise:
+*     x: 
+*     resolve:
+*     reject:
 */
 function RESOLVE_PROMISE(promise, x, resolve, reject) {
   if (promise === x) {
@@ -281,10 +308,11 @@ function RESOLVE_PROMISE(promise, x, resolve, reject) {
     reject(new TypeError('Chaining cycle is deteced for promise'))
     return
   }
-
+  // 如果x是自己的Promise的实现
   if (x instanceof Promise) {
     if (x.status === 'pending') {
       x.then(function(v) {
+        // god,又是递归
         RESOLVE_PROMISE(promise, v, resolve, reject)
       }, reject)
     } else {
@@ -293,20 +321,23 @@ function RESOLVE_PROMISE(promise, x, resolve, reject) {
     return
   }
 
-  // 只有对象和函数这两种数据类型可以保存属性，typeof null也是'object'
+  // 只有对象和函数这两种数据类型可以保存属性，然而typeof null也是'object'
   if (x !== null && (typeof x === 'object' || typeof x === 'function')) {
     try {
       /*
       * 为什么要把then单独拿出来？避免副作用
-      *   因为我们是在读别人给的属性，但是我们不知道该属性具体为什么。也可能报错
+      *   因为我们是在读别人给的属性，但是我们不知道该属性具体是什么。也可能报错
       *   如果该属性是getter,则每次调用就会返回不同的值。
       * 所以只调用一次
-      * 
+      * ---------------------------------------------------------------------
       * a,b,c三者只能调用一个,为什么？TODO
-      *   避免原型链上有then函数但却不是Promise的实现，但是为什么这样就可以避免，我并没有吃透
+      *   避免原型链上有then函数(thenable)但却不是Promise的实现，但是为什么这样就可以避免，我并没有吃透
+      * ---------------------------------------------------------------------
+      * if语句里有两个可以可疑的函数,有函数名resolvePromise，rejectPromise。
+      * 既然是当参数传，我觉得不需要函数名应该也一样吧
       */
       var then = x.then
-      var called = false
+      var called = false // 记录执行状态
       if (typeof then === 'function') {
         then.call(x, function resolvePromise(y) {
           if (called) {
@@ -335,6 +366,65 @@ function RESOLVE_PROMISE(promise, x, resolve, reject) {
   } else {
     resolve(x)
   }
+}
+
+// promise实例的常用方法
+Promise.prototype.catch = function(onRejected) {
+  return this.then(null, onRejected)
+}
+// 不管finally后有没有then也不管then里的函数时成功还是失败,finally里面的函数总是最后调用
+Promise.prototype.finally = function(f) {
+  return this.then(function() {
+    setTimeout(f)
+  }, function() {
+    setTimeout(f)
+  })
+}
+
+// Promise静态方法
+// 将多个 Promise 实例，包装成一个新的 Promise 实例
+Promise.all = function(promises) {
+  return new Promise(function(resolve, reject) {
+    var result = new Array(promises.length)
+    var count = 0
+    for (var i = 0; i < promises.length; i++) {
+      (function(i){
+        promises[i].then(function(value) {
+          result[i] = value
+          count++
+          if (count === promises.length) {
+            resolve(result)
+          }
+        }, function(reason) {
+          reject(reson)
+        })
+      }(i))
+    }
+  })
+}
+// 同样是将多个 Promise 实例，包装成一个新的 Promise 实例
+Promise.race = function(promises) {
+  return new Promise(function(resolve, reject) {
+    for (var promise of promises) {
+      promise.then(function(value) {
+        resolve(value)
+      }, function(reason) {
+        reject(reason)
+      })
+    }
+  })
+}
+// 将值直接resolve
+Promise.resolve = function(value) {
+  return new Promise(function(resolve, reject) {
+    resolve(value)
+  })
+}
+// 将错误直接reject
+Promise.reject = function(reason) {
+  return new Promise(function(resolve, reject) {
+    reject(reason)
+  })
 }
 
 // 测试的方式
